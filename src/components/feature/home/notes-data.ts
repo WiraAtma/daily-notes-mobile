@@ -14,6 +14,17 @@ export type Note = {
   badge?: { label: string; icon?: IconName };
   image?: string;
   footerMeta?: { icon: IconName; label?: string };
+  detail?: {
+    folder?: string;          
+    time?: string;            
+    readMinutes?: number;
+    imageCaption?: string;
+    content?: string;
+    keyPointsTitle?: string;
+    keyPoints?: string[];
+    reminder?: string;
+    tags?: string[];
+  };
 };
 
 export const FILTERS = ['Semua', 'Kuliah', 'Pribadi', 'Tugas'] as const;
@@ -49,6 +60,22 @@ export const NOTES: Note[] = [
     badge: { label: '1 Foto', icon: 'image-outline' },
     image: 'https://picsum.photos/seed/portfolio/800/400',
     footerMeta: { icon: 'attach' },
+    detail: {
+    folder: 'Desain & Produk',
+    time: '14:20',
+    readMinutes: 3,
+    imageCaption: 'Lampiran Gambar - Expo Image Picker',
+    content:
+      'Gunakan palet warna monokrom dengan aksen biru pastel. Fokus utama adalah tipografi yang bersih, whitespace yang lega, serta hierarki visual yang jelas.',
+    keyPointsTitle: 'Poin-poin penting implementasi:',
+    keyPoints: [
+      'Desain komponen kartu seringan mungkin tanpa shadow berlebih.',
+      'Gunakan font sans-serif seperti Inter atau Roboto.',
+      'Pastikan fitur berbagi ke teman berjalan mulus menggunakan Native Share Sheet bawaan Expo.',
+    ],
+    reminder: 'Review kembali sebelum presentasi minggu depan.',
+    tags: ['MobileDesign', 'Portfolio', 'ExpoShare'],
+              },
   },
   {
     id: '4',
