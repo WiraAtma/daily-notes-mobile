@@ -13,10 +13,10 @@ export default function AppTabs() {
       <Tabs.Screen
         name="home/index"
         options={{
-          title: 'Home',
+          title: 'Catatan',
           tabBarIcon: ({ color, size }) => (
             <Ionicons
-              name="home-outline"
+              name="document-text-outline"
               size={size}
               color={color?.toString() ?? '#23262c'}
             />
@@ -27,7 +27,7 @@ export default function AppTabs() {
       <Tabs.Screen
         name="search/index"
         options={{
-          title: 'Search',
+          title: 'Cari',
           tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="search-outline"
@@ -41,7 +41,7 @@ export default function AppTabs() {
       <Tabs.Screen
         name="settings/index"
         options={{
-          title: 'Settings',
+          title: 'Pengaturan',
           tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="settings-outline"
