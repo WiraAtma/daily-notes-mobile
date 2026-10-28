@@ -47,7 +47,9 @@ export default function HomeScreen() {
           </View>
         </ScrollView>
 
-        <FabButton onPress={() => {}} />
+        <FabButton
+          onPress={() => router.push('/home/create')}
+        />
       </SafeAreaView>
     </View>
   );
