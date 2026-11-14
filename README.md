@@ -2,19 +2,25 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
-## Get started
+## Run locally
 
-1. Install dependencies
+1. Copy `.env.example` to `.env` and set `EXPO_PUBLIC_API_URL`.
+2. Start the backend and the Expo development server with `npx expo start`.
+3. Open the project in Expo Go.
 
-   ```bash
-   npm install
-   ```
+The default API URL is `http://127.0.0.1:8000`. `EXPO_PUBLIC_IMAGE_URL` points
+to the public Supabase Storage bucket used for note images. For an Android emulator, set
+`EXPO_PUBLIC_API_URL=http://10.0.2.2:8000`; for a physical device, use your
+computer's LAN IP address. Restart Expo after changing `.env`.
 
-2. Start the app
+The editor uses the backend's signed image-upload endpoints and AI generation
+endpoint.
 
-   ```bash
-   npx expo start
-   ```
+## Email and password authentication
+
+The login and registration screens call the backend's `/auth/login` and
+`/auth/register` endpoints. Registration signs the user in immediately and
+stores the returned application JWT in Expo SecureStore.
 
 In the output, you'll find options to open the app in a
 

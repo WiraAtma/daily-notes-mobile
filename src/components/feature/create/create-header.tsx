@@ -2,9 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { HomeColors } from '@/components/feature/home/home-theme';
 
-type Props = { onBack?: () => void; onSave?: () => void };
+type Props = { onBack?: () => void; onSave?: () => void; isSaving?: boolean };
 
-export function CreateHeader({ onBack, onSave }: Props) {
+export function CreateHeader({ onBack, onSave, isSaving = false }: Props) {
   return (
     <View style={styles.row}>
       <Pressable onPress={onBack} style={styles.back} hitSlop={8}>
@@ -14,8 +14,12 @@ export function CreateHeader({ onBack, onSave }: Props) {
 
       <Text style={styles.title}>Catatan Baru</Text>
 
-      <Pressable onPress={onSave} style={styles.save}>
-        <Text style={styles.saveText}>Simpan</Text>
+      <Pressable
+        onPress={onSave}
+        style={[styles.save, isSaving && styles.disabled]}
+        disabled={isSaving}
+      >
+        <Text style={styles.saveText}>{isSaving ? 'Menyimpan...' : 'Simpan'}</Text>
       </Pressable>
     </View>
   );
@@ -41,4 +45,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   saveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  disabled: { opacity: 0.6 },
 });

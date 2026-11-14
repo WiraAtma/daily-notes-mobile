@@ -2,18 +2,25 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { HomeColors } from './home-theme';
 
-export function HomeHeader() {
+type Props = { onProfilePress?: () => void };
+
+export function HomeHeader({ onProfilePress }: Props) {
   return (
     <View style={styles.row}>
       <View style={styles.left}>
         <Text style={styles.title}>Daily Notes</Text>
       </View>
 
-      <View style={styles.right}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Buka profil"
+        onPress={onProfilePress}
+        style={styles.right}
+      >
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>DN</Text>
+          <Ionicons name="person-outline" size={17} color={HomeColors.primary} />
         </View>
-      </View>
+      </Pressable>
     </View>
   );
 }

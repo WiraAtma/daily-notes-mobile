@@ -1,47 +1,69 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { NoteBadge } from './note-badge';
 import { HomeColors } from './home-theme';
 import { Note } from './notes-data';
 
-type Props = { note: Note; onPress?: () => void };
+type Props = {
+  note: Note;
+  onPress?: () => void;
+  onDelete: () => void;
+  isDeleting?: boolean;
+};
 
-export function NoteCard({ note, onPress }: Props) {
+export function NoteCard({ note, onPress, onDelete, isDeleting = false }: Props) {
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-    >
-      <View style={styles.titleRow}>
-        <Text style={styles.title} numberOfLines={2}>
-          {note.title}
+    <View style={styles.card}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.cardContent, pressed && styles.pressed]}
+      >
+        <View style={styles.titleRow}>
+          <Text style={styles.title} numberOfLines={2}>
+            {note.title}
+          </Text>
+          {note.badge && <NoteBadge label={note.badge.label} icon={note.badge.icon} />}
+        </View>
+
+        <Text style={styles.excerpt} numberOfLines={2}>
+          {note.excerpt}
         </Text>
-        {note.badge && <NoteBadge label={note.badge.label} icon={note.badge.icon} />}
-      </View>
 
-      <Text style={styles.excerpt} numberOfLines={2}>
-        {note.excerpt}
-      </Text>
-
-      {note.image && <Image source={{ uri: note.image }} style={styles.image} />}
+        {note.image && <Image source={{ uri: note.image }} style={styles.image} />}
+      </Pressable>
 
       <View style={styles.footer}>
         <Text style={styles.date}>{note.date}</Text>
 
-        {note.footerMeta && (
-          <View style={styles.meta}>
-            <Ionicons
-              name={note.footerMeta.icon}
-              size={15}
-              color={note.footerMeta.icon === 'attach' ? HomeColors.primary : HomeColors.textMuted}
-            />
-            {note.footerMeta.label && (
-              <Text style={styles.metaText}>{note.footerMeta.label}</Text>
+        <View style={styles.footerActions}>
+          {note.footerMeta && (
+            <View style={styles.meta}>
+              <Ionicons
+                name={note.footerMeta.icon}
+                size={15}
+                color={note.footerMeta.icon === 'attach' ? HomeColors.primary : HomeColors.textMuted}
+              />
+              {note.footerMeta.label && (
+                <Text style={styles.metaText}>{note.footerMeta.label}</Text>
+              )}
+            </View>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Hapus catatan ${note.title}`}
+            disabled={isDeleting}
+            onPress={onDelete}
+            style={styles.deleteButton}
+          >
+            {isDeleting ? (
+              <ActivityIndicator size="small" color="#B42318" />
+            ) : (
+              <Ionicons name="trash-outline" size={16} color="#B42318" />
             )}
-          </View>
-        )}
+          </Pressable>
+        </View>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -54,6 +76,7 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 8,
   },
+  cardContent: { gap: 8 },
   pressed: { opacity: 0.85 },
   titleRow: {
     flexDirection: 'row',
@@ -75,6 +98,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 6,
+  },
+  footerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  deleteButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF3F2',
   },
   date: { fontSize: 11, color: HomeColors.textMuted },
   meta: { flexDirection: 'row', alignItems: 'center', gap: 4 },

@@ -1,327 +1,392 @@
-import { useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { actions, RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
+import * as Clipboard from 'expo-clipboard';
 
-import { NOTES } from '../../components/feature/home/notes-data';
-
-const COLORS = {
-  bg: '#FFFFFF',
-  text: '#1B1E25',
-  muted: '#6B7280',
-  border: '#E5E7EB',
-  primary: '#4361EE',
-  primarySoft: '#EEF1FF',
-  primaryBorder: '#D9DFFF',
-  danger: '#E5484D',
-};
+import { AiBottomSheet } from '@/components/feature/create/ai-bottom-sheet';
+import { HomeColors } from '@/components/feature/home/home-theme';
+import { NOTE_CONTENT_CSS } from '@/constants/note-content';
+import { useAiGeneration } from '@/hooks/use-ai-generation';
+import { editorSelectionScript } from '@/components/feature/create/editor-selection';
+import { useAuth } from '@/providers/auth-provider';
+import { useNote } from '@/hooks/use-notes';
+import {
+  getImageObjectKeys,
+  htmlToPlainText,
+  updateNote,
+} from '@/services/notes';
+import { getErrorMessage } from '@/utils/errors';
+import type { ApiNote } from '@/types/api';
+import { markdownToHtml } from '@/utils/markdown';
 
 export default function NoteDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const insets = useSafeAreaInsets();
-  const [pinned, setPinned] = useState(false);
+  const noteId = Array.isArray(id) ? id[0] : id;
+  const { note, isLoading, error } = useNote(noteId);
+  const { accessToken } = useAuth();
+  const editor = useRef<RichEditor>(null);
+  const ai = useAiGeneration();
+  const [savedNote, setSavedNote] = useState<ApiNote | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [contentDraft, setContentDraft] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [selectedText, setSelectedText] = useState('');
+  const [selectedImageKey, setSelectedImageKey] = useState('');
+  const [isAiVisible, setIsAiVisible] = useState(false);
+  const displayedNote = savedNote?.id === note?.id ? savedNote : note;
 
-  const note = NOTES.find((n) => n.id === id);
+  const handleStartEditing = () => {
+    if (!displayedNote) return;
+    setTitleDraft(displayedNote.title);
+    setContentDraft(displayedNote.content);
+    setEditError(null);
+    setIsEditing(true);
+  };
 
-  if (!note) {
-    return (
-      <View style={[styles.screen, { paddingTop: insets.top }]}>
-        <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.topBar}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-          </Pressable>
-        </View>
-        <View style={styles.empty}>
-          <Ionicons name="document-outline" size={48} color={COLORS.muted} />
-          <Text style={styles.emptyTitle}>Catatan tidak ditemukan</Text>
-          <Text style={styles.emptyDesc}>
-            Catatan dengan ID {id} mungkin sudah dihapus.
-          </Text>
-        </View>
-      </View>
-    );
-  }
+  const handleCancelEditing = () => {
+    if (isSaving) return;
+    setEditError(null);
+    setSelectedText('');
+    setSelectedImageKey('');
+    setIsEditing(false);
+  };
 
-  const detail = note.detail;
-  const folder = detail?.folder ?? note.category;
-  const body = detail?.content ?? note.excerpt;
-  const wordCount = [body, ...(detail?.keyPoints ?? [])]
-    .join(' ')
-    .split(/\s+/).length;
-  const readMinutes = detail?.readMinutes ?? Math.max(1, Math.ceil(wordCount / 200));
-  const dateLabel = detail?.time ? `${note.date}, ${detail.time}` : note.date;
-  const tags = detail?.tags ?? [note.category];
+  const handleSave = async () => {
+    if (!displayedNote || isSaving) return;
+    if (!accessToken) {
+      setEditError('Sesi login tidak ditemukan. Silakan masuk kembali.');
+      return;
+    }
+    if (!titleDraft.trim()) {
+      setEditError('Judul catatan wajib diisi.');
+      return;
+    }
 
-  const handleShare = async () => {
-    const points = detail?.keyPoints?.map((p, i) => `${i + 1}. ${p}`).join('\n');
-    const message = [note.title, '', body, points ? `\n${points}` : '']
-      .join('\n')
-      .trim();
+    setIsSaving(true);
+    setEditError(null);
     try {
-      await Share.share({ title: note.title, message });
-    } catch {
-      Alert.alert('Gagal membagikan', 'Coba lagi beberapa saat lagi.');
+      const updated = await updateNote(accessToken, displayedNote.id, {
+        title: titleDraft.trim(),
+        content: contentDraft,
+      });
+      setSavedNote(updated);
+      setSelectedText('');
+      setSelectedImageKey('');
+      setIsEditing(false);
+    } catch (cause) {
+      setEditError(getErrorMessage(cause));
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDelete = () => {
-    Alert.alert('Hapus catatan?', `"${note.title}" akan dihapus permanen.`, [
-      { text: 'Batal', style: 'cancel' },
-      {
-        text: 'Hapus',
-        style: 'destructive',
-        onPress: () => {
-          // TODO: hapus dari state/AsyncStorage kamu di sini
-          router.back();
-        },
-      },
-    ]);
+  const handleInsertAnswer = () => {
+    if (!isEditing || !ai.output) return;
+    editor.current?.insertHTML(markdownToHtml(ai.output));
+    setSelectedText('');
+    setSelectedImageKey('');
+    setIsAiVisible(false);
+  };
+
+  const handleEditorMessage = (message: { type: string; data?: unknown }) => {
+    if (message.type !== 'APP_SELECTION_CHANGE') return;
+    if (typeof message.data !== 'object' || message.data === null) return;
+    const data = message.data;
+    if ('text' in data && typeof data.text === 'string') setSelectedText(data.text);
+    if ('imageKey' in data && typeof data.imageKey === 'string') {
+      setSelectedImageKey(data.imageKey);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!selectedText) return;
+    try {
+      await Clipboard.setStringAsync(selectedText);
+    } catch (cause) {
+      Alert.alert('Tidak dapat menyalin', getErrorMessage(cause));
+    }
+  };
+
+  const handleGenerate = async (prompt: string) => {
+    if (!displayedNote) return;
+    const context = selectedText || htmlToPlainText(displayedNote.content);
+    const imageKeys = selectedImageKey
+      ? [selectedImageKey]
+      : getImageObjectKeys(displayedNote.content);
+    await ai.generate(
+      `${prompt}\n\nKonteks catatan:\n${context}`.slice(0, 20000),
+      imageKeys,
+    );
   };
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
-      <Stack.Screen options={{ headerShown: false }} />
-
-      {/* Top bar */}
-      <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} hitSlop={10}>
-          <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-        </Pressable>
-
-        <View style={styles.folderChip}>
-          <Ionicons name="folder-outline" size={14} color={COLORS.primary} />
-          <Text style={styles.folderText}>{folder}</Text>
-        </View>
-
-        <View style={styles.actions}>
-          <Pressable onPress={handleShare} hitSlop={8}>
-            <Ionicons name="share-social-outline" size={22} color={COLORS.text} />
-          </Pressable>
-          <Pressable onPress={() => setPinned((p) => !p)} hitSlop={8}>
-            <Ionicons
-              name={pinned ? 'pin' : 'pin-outline'}
-              size={22}
-              color={pinned ? COLORS.primary : COLORS.text}
-            />
-          </Pressable>
-          <Pressable onPress={handleDelete} hitSlop={8}>
-            <Ionicons name="trash-outline" size={22} color={COLORS.text} />
-          </Pressable>
-        </View>
-      </View>
-
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + 24 },
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>{note.title}</Text>
-
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Ionicons name="calendar-outline" size={14} color={COLORS.muted} />
-            <Text style={styles.metaText}>{dateLabel}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Ionicons name="time-outline" size={14} color={COLORS.muted} />
-            <Text style={styles.metaText}>{readMinutes} menit baca</Text>
-          </View>
-        </View>
-
-        {note.image && (
-          <View style={styles.imageWrap}>
-            <Image source={{ uri: note.image }} style={styles.image} />
-            <View style={styles.caption}>
-              <Ionicons name="image-outline" size={12} color="#fff" />
-              <Text style={styles.captionText}>
-                {detail?.imageCaption ?? 'Lampiran Gambar'}
-              </Text>
+    <View style={styles.screen}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.topBar}>
+            <View style={styles.topBarSide}>
+              <Pressable
+                accessibilityLabel="Kembali ke catatan"
+                onPress={() => router.back()}
+                hitSlop={10}
+              >
+                <Ionicons name="arrow-back" size={23} color="#1B1E25" />
+              </Pressable>
+            </View>
+            <Text style={styles.topBarTitle}>Catatan Harian</Text>
+            <View style={[styles.topBarSide, styles.topBarActions]}>
+              {isEditing ? (
+                <>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isSaving}
+                    onPress={handleCancelEditing}
+                  >
+                    <Text style={styles.cancelText}>Batal</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isSaving}
+                    onPress={() => void handleSave()}
+                  >
+                    {isSaving ? (
+                      <ActivityIndicator size="small" color={HomeColors.primary} />
+                    ) : (
+                      <Text style={styles.saveText}>Simpan</Text>
+                    )}
+                  </Pressable>
+                </>
+              ) : displayedNote ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit catatan"
+                  onPress={handleStartEditing}
+                  style={styles.editButton}
+                >
+                  <Ionicons name="create-outline" size={17} color={HomeColors.primary} />
+                  <Text style={styles.editText}>Edit</Text>
+                </Pressable>
+              ) : null}
             </View>
           </View>
-        )}
 
-        <Text style={styles.body}>{body}</Text>
-
-        {detail?.keyPoints && detail.keyPoints.length > 0 && (
-          <View style={styles.pointsCard}>
-            <View style={styles.pointsHeader}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={18}
-                color={COLORS.primary}
-              />
-              <Text style={styles.pointsTitle}>
-                {detail.keyPointsTitle ?? 'Poin-poin penting:'}
-              </Text>
+          {isLoading ? (
+            <View style={styles.center}>
+              <ActivityIndicator color="#315FEA" />
             </View>
-            {detail.keyPoints.map((point, index) => (
-              <View key={index} style={styles.pointRow}>
-                <Text style={styles.pointNumber}>{index + 1}.</Text>
-                <Text style={styles.pointText}>{point}</Text>
+          ) : error ? (
+            <View style={styles.center}>
+              <Ionicons name="alert-circle-outline" size={34} color="#B42318" />
+              <Text style={styles.error}>{error}</Text>
+            </View>
+          ) : displayedNote ? (
+            <ScrollView
+              style={styles.flex}
+              contentContainerStyle={styles.content}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {isEditing ? (
+                <TextInput
+                  value={titleDraft}
+                  onChangeText={setTitleDraft}
+                  placeholder="Judul catatan"
+                  placeholderTextColor="#737E91"
+                  multiline
+                  maxLength={255}
+                  style={styles.titleInput}
+                />
+              ) : (
+                <Text style={styles.title}>{displayedNote.title}</Text>
+              )}
+              <View style={styles.meta}>
+                <Ionicons name="calendar-outline" size={14} color="#737E91" />
+                <Text style={styles.metaText}>
+                  {new Date(displayedNote.updated_at).toLocaleString('id-ID', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })}
+                </Text>
               </View>
-            ))}
-          </View>
-        )}
+              {editError ? <Text style={styles.error}>{editError}</Text> : null}
+              <RichEditor
+                key={`${displayedNote.id}-${isEditing ? 'edit' : 'read'}`}
+                ref={editor}
+                disabled={!isEditing}
+                initialContentHTML={isEditing ? contentDraft : displayedNote.content}
+                initialHeight={260}
+                editorStyle={{
+                  backgroundColor: '#FFFFFF',
+                  color: '#27334D',
+                  contentCSSText: `font-size: 15px; line-height: 1.65; padding: 0; ${NOTE_CONTENT_CSS}`,
+                }}
+                onChange={isEditing ? setContentDraft : undefined}
+                onMessage={handleEditorMessage}
+                editorInitializedCallback={() =>
+                  editor.current?.injectJavascript(editorSelectionScript)
+                }
+                style={styles.editor}
+              />
+            </ScrollView>
+          ) : null}
 
-        {detail?.reminder && <Text style={styles.reminder}>{detail.reminder}</Text>}
-
-        <View style={styles.tags}>
-          {tags.map((tag) => (
-            <View key={tag} style={styles.tag}>
-              <Text style={styles.tagText}>#{tag}</Text>
+          {isEditing && !isAiVisible ? (
+            <View style={styles.toolbar}>
+              <RichToolbar
+                getEditor={() => editor.current!}
+                actions={[
+                  actions.setBold,
+                  actions.setItalic,
+                  actions.insertBulletsList,
+                  actions.insertOrderedList,
+                  actions.checkboxList,
+                ]}
+                iconTint="#27334D"
+                selectedIconTint={HomeColors.primary}
+                disabledIconTint="#737E91"
+                iconSize={19}
+                flatContainerStyle={styles.toolbarItems}
+              />
             </View>
-          ))}
-        </View>
+          ) : null}
 
-        <Pressable
-          onPress={handleShare}
-          style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="share-outline" size={18} color="#fff" />
-          <Text style={styles.primaryBtnText}>Bagikan Catatan Ini</Text>
-        </Pressable>
+          {!isAiVisible ? (
+            <View style={styles.selectionBar}>
+              {selectedText ? (
+                <Pressable onPress={() => void handleCopy()} style={styles.selectionAction}>
+                  <Ionicons name="copy-outline" size={16} color="#27334D" />
+                  <Text style={styles.selectionLabel}>Salin</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => {
+                  ai.clear();
+                  setIsAiVisible(true);
+                }}
+                style={[styles.selectionAction, styles.aiAction]}
+              >
+                <Ionicons name="sparkles" size={16} color="#FFFFFF" />
+                <Text style={[styles.selectionLabel, styles.aiSelectionLabel]}>
+                  {selectedText || selectedImageKey ? 'Tanya AI yang dipilih' : 'Tanya AI'}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </KeyboardAvoidingView>
+      </SafeAreaView>
 
-        <Pressable
-          onPress={handleDelete}
-          style={({ pressed }) => [styles.ghostBtn, pressed && { opacity: 0.6 }]}
-        >
-          <Ionicons name="trash-outline" size={16} color={COLORS.muted} />
-          <Text style={styles.ghostBtnText}>Hapus Catatan</Text>
-        </Pressable>
-      </ScrollView>
+      <AiBottomSheet
+        visible={isAiVisible}
+        selectedText={selectedText}
+        hasSelectedImage={Boolean(selectedImageKey)}
+        isLoading={ai.isLoading}
+        output={ai.output}
+        error={ai.error}
+        onInsert={isEditing ? handleInsertAnswer : undefined}
+        onClose={() => setIsAiVisible(false)}
+        onGenerate={handleGenerate}
+        onCopy={() => {
+          if (!ai.output) return;
+          void Clipboard.setStringAsync(ai.output).catch((cause: unknown) =>
+            Alert.alert('Tidak dapat menyalin', getErrorMessage(cause)),
+          );
+        }}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: COLORS.bg },
-
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
+  safeArea: { flex: 1 },
+  flex: { flex: 1 },
+  topBarSide: { width: 82, flexDirection: 'row', alignItems: 'center' },
+  topBarActions: { justifyContent: 'flex-end', gap: 10 },
   topBar: {
+    height: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingHorizontal: 18,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: '#E5E8EF',
   },
-  folderChip: {
+  topBarTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#27334D',
+  },
+  editButton: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  editText: { color: HomeColors.primary, fontSize: 12, fontWeight: '700' },
+  cancelText: { color: '#667085', fontSize: 12, fontWeight: '600' },
+  saveText: { color: HomeColors.primary, fontSize: 12, fontWeight: '700' },
+  content: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 32 },
+  title: { color: '#1B1E25', fontSize: 27, lineHeight: 34, fontWeight: '800' },
+  titleInput: {
+    color: '#1B1E25',
+    fontSize: 27,
+    lineHeight: 34,
+    fontWeight: '800',
+    paddingVertical: 0,
+    marginBottom: 4,
+  },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, marginBottom: 22 },
+  metaText: { fontSize: 12, color: '#737E91' },
+  editor: { minHeight: 260 },
+  toolbar: {
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: COLORS.primarySoft,
+    paddingHorizontal: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E8EF',
+    backgroundColor: '#FFFFFF',
   },
-  folderText: { fontSize: 12, fontWeight: '600', color: COLORS.primary },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-
-  content: { paddingHorizontal: 20, paddingTop: 20 },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: COLORS.text,
-    lineHeight: 34,
+  toolbarItems: { flex: 1 },
+  selectionBar: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E8EF',
+    backgroundColor: '#F6F7FB',
   },
-  metaRow: { flexDirection: 'row', gap: 16, marginTop: 10, marginBottom: 18 },
-  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  metaText: { fontSize: 12, color: COLORS.muted },
-
-  imageWrap: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginBottom: 18,
-    backgroundColor: COLORS.border,
-  },
-  image: { width: '100%', height: 190 },
-  caption: {
-    position: 'absolute',
-    left: 10,
-    bottom: 10,
+  selectionAction: {
+    minHeight: 32,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 12,
+    borderRadius: 18,
   },
-  captionText: { fontSize: 11, color: '#fff' },
-
-  body: { fontSize: 15, lineHeight: 24, color: COLORS.text, marginBottom: 18 },
-
-  pointsCard: {
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: COLORS.primarySoft,
-    borderWidth: 1,
-    borderColor: COLORS.primaryBorder,
-    marginBottom: 16,
-    gap: 10,
-  },
-  pointsHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pointsTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
-  pointRow: { flexDirection: 'row', gap: 8 },
-  pointNumber: { fontSize: 14, color: COLORS.primary, fontWeight: '700' },
-  pointText: { flex: 1, fontSize: 14, lineHeight: 21, color: COLORS.text },
-
-  reminder: {
-    fontSize: 14,
-    fontStyle: 'italic',
-    color: COLORS.primary,
-    marginBottom: 18,
-  },
-
-  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 24 },
-  tag: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: COLORS.primarySoft,
-  },
-  tagText: { fontSize: 12, color: COLORS.primary, fontWeight: '500' },
-
-  primaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: 50,
-    borderRadius: 14,
-    backgroundColor: COLORS.primary,
-  },
-  primaryBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
-  ghostBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    height: 44,
-    marginTop: 8,
-  },
-  ghostBtnText: { fontSize: 14, color: COLORS.muted },
-
-  empty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 40,
-  },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text },
-  emptyDesc: { fontSize: 14, color: COLORS.muted, textAlign: 'center' },
+  aiAction: { backgroundColor: '#315FEA' },
+  selectionLabel: { color: '#27334D', fontSize: 12, fontWeight: '700' },
+  aiSelectionLabel: { color: '#FFFFFF' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
+  error: { textAlign: 'center', color: '#B42318', fontSize: 13 },
 });
