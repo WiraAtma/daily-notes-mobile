@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import Markdown, { type MarkdownStyleMap } from '@ronradtke/react-native-markdown-display';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  Animated,
   ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
@@ -46,10 +47,37 @@ export function AiBottomSheet({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [prompt, setPrompt] = useState('');
+  const [skeletonOpacity] = useState(() => new Animated.Value(1));
   const sheetHeight = Math.min(
     windowHeight * (output ? 0.78 : 0.52),
     windowHeight - insets.top - 16,
   );
+
+  useEffect(() => {
+    if (!isLoading) {
+      skeletonOpacity.stopAnimation();
+      skeletonOpacity.setValue(1);
+      return;
+    }
+
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(skeletonOpacity, {
+          toValue: 0.4,
+          duration: 650,
+          useNativeDriver: true,
+        }),
+        Animated.timing(skeletonOpacity, {
+          toValue: 1,
+          duration: 650,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+
+    return () => pulse.stop();
+  }, [isLoading, skeletonOpacity]);
 
   const handleClose = () => {
     setPrompt('');
@@ -58,7 +86,9 @@ export function AiBottomSheet({
 
   const handleGenerate = () => {
     if (!prompt.trim() || isLoading) return;
-    void onGenerate(prompt.trim()).catch(() => undefined);
+    const submittedPrompt = prompt.trim();
+    setPrompt('');
+    void onGenerate(submittedPrompt).catch(() => undefined);
   };
 
   return (
@@ -147,7 +177,26 @@ export function AiBottomSheet({
               </ScrollView>
             ) : (
               <View style={styles.answerSpacer}>
-                {!error ? (
+                {isLoading ? (
+                  <View
+                    accessibilityLabel="AI sedang menyusun jawaban"
+                    style={styles.loadingAnswer}
+                  >
+                    <View style={styles.loadingHeader}>
+                      <Ionicons name="sparkles" size={15} color="#315FEA" />
+                      <Text style={styles.loadingTitle}>AI sedang menjawab</Text>
+                    </View>
+                    <Animated.View
+                      style={[styles.skeletonLine, styles.skeletonLong, { opacity: skeletonOpacity }]}
+                    />
+                    <Animated.View
+                      style={[styles.skeletonLine, styles.skeletonMedium, { opacity: skeletonOpacity }]}
+                    />
+                    <Animated.View
+                      style={[styles.skeletonLine, styles.skeletonShort, { opacity: skeletonOpacity }]}
+                    />
+                  </View>
+                ) : !error ? (
                   <View style={styles.emptyState}>
                     <Ionicons name="sparkles-outline" size={18} color="#929CB0" />
                     <Text style={styles.emptyStateText}>Jawaban AI akan muncul di sini</Text>
@@ -263,6 +312,19 @@ const styles = StyleSheet.create({
   contextHint: { color: '#707B90', fontSize: 12 },
   answerWrap: { flex: 1, minHeight: 0, marginBottom: 8 },
   answerSpacer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingAnswer: {
+    width: '100%',
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#F6F7FB',
+  },
+  loadingHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  loadingTitle: { color: '#596579', fontSize: 12, fontWeight: '600' },
+  skeletonLine: { height: 9, borderRadius: 5, backgroundColor: '#DDE3EF' },
+  skeletonLong: { width: '94%' },
+  skeletonMedium: { width: '76%' },
+  skeletonShort: { width: '54%' },
   emptyState: {
     flexDirection: 'row',
     alignItems: 'center',
