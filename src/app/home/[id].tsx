@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
+  Image,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -12,33 +14,59 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { actions, RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
-import * as Clipboard from 'expo-clipboard';
+import RenderHtml, { type MixedStyleDeclaration } from 'react-native-render-html';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AiBottomSheet } from '@/components/feature/create/ai-bottom-sheet';
+import { editorSelectionScript } from '@/components/feature/create/editor-selection';
 import { HomeColors } from '@/components/feature/home/home-theme';
 import { NOTE_CONTENT_CSS } from '@/constants/note-content';
 import { useAiGeneration } from '@/hooks/use-ai-generation';
-import { editorSelectionScript } from '@/components/feature/create/editor-selection';
-import { useAuth } from '@/providers/auth-provider';
 import { useNote } from '@/hooks/use-notes';
-import {
-  getImageObjectKeys,
-  htmlToPlainText,
-  updateNote,
-} from '@/services/notes';
-import { getErrorMessage } from '@/utils/errors';
+import { useAuth } from '@/providers/auth-provider';
+import { getImageObjectKeys, htmlToPlainText, updateNote } from '@/services/notes';
 import type { ApiNote } from '@/types/api';
-import { markdownToHtml } from '@/utils/markdown';
+import { getErrorMessage } from '@/utils/errors';
+import { appendHtmlContent, markdownToHtml } from '@/utils/markdown';
+
+const CONTENT_PADDING = 20;
+const MIN_EDIT_HEIGHT = 260;
+
+// Gaya mode baca (padanan manual dari NOTE_CONTENT_CSS). Sesuaikan dengan tema kamu.
+const baseStyle: MixedStyleDeclaration = { color: '#27334D', fontSize: 15, lineHeight: 25 };
+const tagsStyles: Record<string, MixedStyleDeclaration> = {
+  p: { marginTop: 0, marginBottom: 10 },
+  h1: { fontSize: 22, lineHeight: 30, fontWeight: '700', color: '#1B1E25', marginVertical: 8 },
+  h2: { fontSize: 19, lineHeight: 27, fontWeight: '700', color: '#1B1E25', marginVertical: 8 },
+  h3: { fontSize: 16, lineHeight: 24, fontWeight: '700', color: '#1B1E25', marginVertical: 6 },
+  ul: { marginTop: 0, marginBottom: 10 },
+  ol: { marginTop: 0, marginBottom: 10 },
+  li: { marginBottom: 4 },
+  blockquote: {
+    borderLeftWidth: 3,
+    borderLeftColor: '#D5DAE6',
+    paddingLeft: 10,
+    marginLeft: 0,
+    marginVertical: 8,
+  },
+  a: { color: '#315FEA' },
+  img: { borderRadius: 8, marginVertical: 8 },
+};
 
 export default function NoteDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const noteId = Array.isArray(id) ? id[0] : id;
   const { note, isLoading, error } = useNote(noteId);
   const { accessToken } = useAuth();
+  const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const editor = useRef<RichEditor>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const editorTopRef = useRef(0);
   const ai = useAiGeneration();
   const [savedNote, setSavedNote] = useState<ApiNote | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -48,22 +76,69 @@ export default function NoteDetailScreen() {
   const [editError, setEditError] = useState<string | null>(null);
   const [selectedText, setSelectedText] = useState('');
   const [selectedImageKey, setSelectedImageKey] = useState('');
+  const [selectedImageUrl, setSelectedImageUrl] = useState('');
+  const [contentHeight, setContentHeight] = useState(0);
   const [isAiVisible, setIsAiVisible] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const displayedNote = savedNote?.id === note?.id ? savedNote : note;
+  const contentWidth = windowWidth - CONTENT_PADDING * 2;
+  const editorHeight = Math.max(contentHeight, MIN_EDIT_HEIGHT);
+
+  const htmlSource = useMemo(
+    () => ({ html: displayedNote?.content || '<p></p>' }),
+    [displayedNote?.content],
+  );
+
+  // Mode baca: tap gambar = pilih / batal pilih sebagai konteks AI.
+  const renderersProps = useMemo(
+    () => ({
+      img: {
+        onPress: (_event: unknown, src: string, htmlAttribs: Record<string, string>) => {
+          const key = htmlAttribs['data-object-key'] ?? '';
+          if (!key) return;
+          setSelectedImageKey((current) => (current === key ? '' : key));
+          setSelectedImageUrl((current) => (current === src ? '' : src));
+        },
+      },
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => setIsKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setIsKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // Editor di-remount saat masuk/keluar mode edit: reset tinggi lama.
+  useEffect(() => {
+    setContentHeight(0);
+  }, [displayedNote?.id, isEditing]);
+
+  const clearSelection = () => {
+    setSelectedText('');
+    setSelectedImageKey('');
+    setSelectedImageUrl('');
+  };
 
   const handleStartEditing = () => {
     if (!displayedNote) return;
     setTitleDraft(displayedNote.title);
     setContentDraft(displayedNote.content);
     setEditError(null);
+    clearSelection();
     setIsEditing(true);
   };
 
   const handleCancelEditing = () => {
     if (isSaving) return;
     setEditError(null);
-    setSelectedText('');
-    setSelectedImageKey('');
+    clearSelection();
     setIsEditing(false);
   };
 
@@ -86,8 +161,7 @@ export default function NoteDetailScreen() {
         content: contentDraft,
       });
       setSavedNote(updated);
-      setSelectedText('');
-      setSelectedImageKey('');
+      clearSelection();
       setIsEditing(false);
     } catch (cause) {
       setEditError(getErrorMessage(cause));
@@ -98,20 +172,37 @@ export default function NoteDetailScreen() {
 
   const handleInsertAnswer = () => {
     if (!isEditing || !ai.output) return;
-    editor.current?.insertHTML(markdownToHtml(ai.output));
-    setSelectedText('');
-    setSelectedImageKey('');
+    const combined = appendHtmlContent(contentDraft, markdownToHtml(ai.output));
+    setContentDraft(combined);
+    editor.current?.setContentHTML(combined);
+    clearSelection();
     setIsAiVisible(false);
   };
 
   const handleEditorMessage = (message: { type: string; data?: unknown }) => {
-    if (message.type !== 'APP_SELECTION_CHANGE') return;
     if (typeof message.data !== 'object' || message.data === null) return;
     const data = message.data;
+    if (message.type === 'APP_CONTENT_HEIGHT') {
+      if ('height' in data && typeof data.height === 'number' && data.height > 0) {
+        setContentHeight(Math.ceil(data.height));
+      }
+      return;
+    }
+    if (message.type !== 'APP_SELECTION_CHANGE') return;
     if ('text' in data && typeof data.text === 'string') setSelectedText(data.text);
     if ('imageKey' in data && typeof data.imageKey === 'string') {
       setSelectedImageKey(data.imageKey);
     }
+    if ('imageUrl' in data && typeof data.imageUrl === 'string') {
+      setSelectedImageUrl(data.imageUrl);
+    }
+  };
+
+  const handleCursorPosition = (offsetY: number) => {
+    scrollRef.current?.scrollTo({
+      y: Math.max(editorTopRef.current + offsetY - 30, 0),
+      animated: true,
+    });
   };
 
   const handleCopy = async () => {
@@ -129,20 +220,14 @@ export default function NoteDetailScreen() {
     const imageKeys = selectedImageKey
       ? [selectedImageKey]
       : getImageObjectKeys(displayedNote.content);
-    await ai.generate(
-      `${prompt}\n\nKonteks catatan:\n${context}`.slice(0, 20000),
-      imageKeys,
-    );
+    await ai.generate(`${prompt}\n\nKonteks catatan:\n${context}`.slice(0, 20000), imageKeys);
   };
 
   return (
     <View style={styles.screen}>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
-        <KeyboardAvoidingView
-          style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
+        <KeyboardAvoidingView style={styles.flex} behavior="padding">
           <View style={styles.topBar}>
             <View style={styles.topBarSide}>
               <Pressable
@@ -201,9 +286,11 @@ export default function NoteDetailScreen() {
             </View>
           ) : displayedNote ? (
             <ScrollView
+              ref={scrollRef}
               style={styles.flex}
               contentContainerStyle={styles.content}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               showsVerticalScrollIndicator={false}
             >
               {isEditing ? (
@@ -217,7 +304,9 @@ export default function NoteDetailScreen() {
                   style={styles.titleInput}
                 />
               ) : (
-                <Text style={styles.title}>{displayedNote.title}</Text>
+                <Text selectable style={styles.title}>
+                  {displayedNote.title}
+                </Text>
               )}
               <View style={styles.meta}>
                 <Ionicons name="calendar-outline" size={14} color="#737E91" />
@@ -229,24 +318,48 @@ export default function NoteDetailScreen() {
                 </Text>
               </View>
               {editError ? <Text style={styles.error}>{editError}</Text> : null}
-              <RichEditor
-                key={`${displayedNote.id}-${isEditing ? 'edit' : 'read'}`}
-                ref={editor}
-                disabled={!isEditing}
-                initialContentHTML={isEditing ? contentDraft : displayedNote.content}
-                initialHeight={260}
-                editorStyle={{
-                  backgroundColor: '#FFFFFF',
-                  color: '#27334D',
-                  contentCSSText: `font-size: 15px; line-height: 1.65; padding: 0; ${NOTE_CONTENT_CSS}`,
-                }}
-                onChange={isEditing ? setContentDraft : undefined}
-                onMessage={handleEditorMessage}
-                editorInitializedCallback={() =>
-                  editor.current?.injectJavascript(editorSelectionScript)
-                }
-                style={styles.editor}
-              />
+
+              {isEditing ? (
+                // Sama persis dengan halaman create: tinggi mengikuti mekanisme bawaan editor.
+                <View
+                  style={{ height: editorHeight }}
+                  onLayout={(e) => (editorTopRef.current = e.nativeEvent.layout.y)}
+                >
+                  <RichEditor
+                    key={`${displayedNote.id}-edit`}
+                    ref={editor}
+                    useContainer={false}
+                    scrollEnabled={false}
+                    initialContentHTML={contentDraft}
+                    placeholder="Tulis catatanmu di sini..."
+                    editorStyle={{
+                      backgroundColor: '#FFFFFF',
+                      color: '#27334D',
+                      placeholderColor: '#737E91',
+                      caretColor: HomeColors.primary,
+                      contentCSSText: `font-size: 15px; line-height: 1.65; padding: 0; ${NOTE_CONTENT_CSS}`,
+                    }}
+                    initialHeight={editorHeight}
+                    onChange={setContentDraft}
+                    onMessage={handleEditorMessage}
+                    editorInitializedCallback={() =>
+                      editor.current?.injectJavascript(editorSelectionScript)
+                    }
+                    onCursorPosition={handleCursorPosition}
+                    style={{ height: editorHeight, backgroundColor: '#FFFFFF' }}
+                  />
+                </View>
+              ) : (
+                // Mode baca: render native juga, langsung penuh tanpa paint bertahap.
+                <RenderHtml
+                  contentWidth={contentWidth}
+                  source={htmlSource}
+                  baseStyle={baseStyle}
+                  tagsStyles={tagsStyles}
+                  defaultTextProps={{ selectable: true }}
+                  renderersProps={renderersProps}
+                />
+              )}
             </ScrollView>
           ) : null}
 
@@ -272,6 +385,21 @@ export default function NoteDetailScreen() {
 
           {!isAiVisible ? (
             <View style={styles.selectionBar}>
+              {selectedImageKey && selectedImageUrl ? (
+                <View style={styles.imageChip}>
+                  <Image source={{ uri: selectedImageUrl }} style={styles.imageChipThumb} />
+                  <Pressable
+                    accessibilityLabel="Batalkan pilihan gambar"
+                    hitSlop={8}
+                    onPress={() => {
+                      setSelectedImageKey('');
+                      setSelectedImageUrl('');
+                    }}
+                  >
+                    <Ionicons name="close-circle" size={16} color="#64748B" />
+                  </Pressable>
+                </View>
+              ) : null}
               {selectedText ? (
                 <Pressable onPress={() => void handleCopy()} style={styles.selectionAction}>
                   <Ionicons name="copy-outline" size={16} color="#27334D" />
@@ -292,6 +420,13 @@ export default function NoteDetailScreen() {
               </Pressable>
             </View>
           ) : null}
+
+          <View
+            style={{
+              height: isKeyboardVisible ? 0 : insets.bottom,
+              backgroundColor: '#F6F7FB',
+            }}
+          />
         </KeyboardAvoidingView>
       </SafeAreaView>
 
@@ -299,6 +434,7 @@ export default function NoteDetailScreen() {
         visible={isAiVisible}
         selectedText={selectedText}
         hasSelectedImage={Boolean(selectedImageKey)}
+        selectedImageUrl={selectedImageUrl}
         isLoading={ai.isLoading}
         output={ai.output}
         error={ai.error}
@@ -342,7 +478,7 @@ const styles = StyleSheet.create({
   editText: { color: HomeColors.primary, fontSize: 12, fontWeight: '700' },
   cancelText: { color: '#667085', fontSize: 12, fontWeight: '600' },
   saveText: { color: HomeColors.primary, fontSize: 12, fontWeight: '700' },
-  content: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 32 },
+  content: { paddingHorizontal: CONTENT_PADDING, paddingTop: 22, paddingBottom: 40 },
   title: { color: '#1B1E25', fontSize: 27, lineHeight: 34, fontWeight: '800' },
   titleInput: {
     color: '#1B1E25',
@@ -359,6 +495,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#E5E8EF',
@@ -376,6 +513,16 @@ const styles = StyleSheet.create({
     borderTopColor: '#E5E8EF',
     backgroundColor: '#F6F7FB',
   },
+  imageChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 3,
+    paddingRight: 6,
+    borderRadius: 10,
+    backgroundColor: '#EEF1FF',
+  },
+  imageChipThumb: { width: 30, height: 30, borderRadius: 7, backgroundColor: '#DDE3EF' },
   selectionAction: {
     minHeight: 32,
     flexDirection: 'row',

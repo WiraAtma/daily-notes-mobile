@@ -2,11 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
-import { actions, RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -15,11 +14,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { actions, RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AiBottomSheet } from '@/components/feature/create/ai-bottom-sheet';
 import { CreateHeader } from '@/components/feature/create/create-header';
 import { editorSelectionScript } from '@/components/feature/create/editor-selection';
+import { FadeInView } from '@/components/feature/create/fade-in-view';
 import { HomeColors } from '@/components/feature/home/home-theme';
 import { NOTE_CONTENT_CSS } from '@/constants/note-content';
 import { MaxContentWidth } from '@/constants/theme';
@@ -32,20 +34,43 @@ import {
   uploadNoteImage,
 } from '@/services/notes';
 import { getErrorMessage } from '@/utils/errors';
-import { markdownToHtml } from '@/utils/markdown';
+import { appendHtmlContent, markdownToHtml } from '@/utils/markdown';
 
 export default function CreateNoteScreen() {
   const editor = useRef<RichEditor>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const editorY = useRef(0);
+  const insets = useSafeAreaInsets();
   const { accessToken } = useAuth();
   const ai = useAiGeneration();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [selectedText, setSelectedText] = useState('');
   const [selectedImageKey, setSelectedImageKey] = useState('');
+  const [selectedImageUrl, setSelectedImageUrl] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isAiVisible, setIsAiVisible] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isEditorReady, setIsEditorReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => setIsKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setIsKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // Cadangan: editor tidak pernah tersembunyi selamanya.
+  useEffect(() => {
+    const timer = setTimeout(() => setIsEditorReady(true), 1500);
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleSave = async () => {
     if (isUploading) {
@@ -101,6 +126,7 @@ export default function CreateNoteScreen() {
         image.uri,
         image.fileName ?? 'catatan.jpg',
         image.mimeType ?? null,
+        image.fileSize ?? null,
       );
       editor.current?.insertHTML(
         `<img src="${escapeHtml(uploaded.downloadUrl)}" data-object-key="${escapeHtml(uploaded.objectKey)}" alt="${escapeHtml(image.fileName ?? 'Foto catatan')}" />`,
@@ -119,6 +145,9 @@ export default function CreateNoteScreen() {
     if ('text' in data && typeof data.text === 'string') setSelectedText(data.text);
     if ('imageKey' in data && typeof data.imageKey === 'string') {
       setSelectedImageKey(data.imageKey);
+    }
+    if ('imageUrl' in data && typeof data.imageUrl === 'string') {
+      setSelectedImageUrl(data.imageUrl);
     }
   };
 
@@ -152,17 +181,18 @@ export default function CreateNoteScreen() {
       : '';
     await ai.generate(
       `${prompt}${context}`.slice(0, 20000),
-      selectedImageKey
-        ? [selectedImageKey]
-        : getImageObjectKeys(content),
+      selectedImageKey ? [selectedImageKey] : getImageObjectKeys(content),
     );
   };
 
   const handleInsertAnswer = () => {
     if (!ai.output) return;
-    editor.current?.insertHTML(markdownToHtml(ai.output));
+    const combined = appendHtmlContent(content, markdownToHtml(ai.output));
+    setContent(combined);
+    editor.current?.setContentHTML(combined);
     setSelectedText('');
     setSelectedImageKey('');
+    setSelectedImageUrl('');
     setIsAiVisible(false);
   };
 
@@ -175,15 +205,19 @@ export default function CreateNoteScreen() {
     }
   };
 
+  const handleCursorPosition = (offsetY: number) => {
+    scrollRef.current?.scrollTo({
+      y: Math.max(editorY.current + offsetY - 120, 0),
+      animated: true,
+    });
+  };
+
   const wordCount = content.replace(/<[^>]*>/g, ' ').trim().split(/\s+/).filter(Boolean).length;
 
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView
-          style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <KeyboardAvoidingView style={styles.flex} behavior="padding">
           <CreateHeader
             onBack={() => router.back()}
             onSave={handleSave}
@@ -191,6 +225,7 @@ export default function CreateNoteScreen() {
           />
 
           <ScrollView
+            ref={scrollRef}
             style={styles.flex}
             contentContainerStyle={styles.content}
             keyboardShouldPersistTaps="handled"
@@ -213,29 +248,34 @@ export default function CreateNoteScreen() {
             />
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
-            {isUploading ? (
-              <Text style={styles.uploading}>Mengunggah foto...</Text>
-            ) : null}
+            {isUploading ? <Text style={styles.uploading}>Mengunggah foto...</Text> : null}
 
-            <RichEditor
-              ref={editor}
-              initialContentHTML={content}
-              placeholder="Tulis catatanmu di sini..."
-              editorStyle={{
-                backgroundColor: '#FFFFFF',
-                color: HomeColors.textTitle,
-                placeholderColor: HomeColors.textMuted,
-                caretColor: HomeColors.primary,
-                contentCSSText: `font-size: 16px; line-height: 1.65; padding: 0; ${NOTE_CONTENT_CSS}`,
-              }}
-              initialHeight={260}
-              onChange={setContent}
-              onMessage={handleEditorMessage}
-              editorInitializedCallback={() =>
-                editor.current?.injectJavascript(editorSelectionScript)
-              }
-              style={styles.editor}
-            />
+            <View onLayout={(e) => (editorY.current = e.nativeEvent.layout.y)}>
+              <FadeInView ready={isEditorReady} style={styles.editor}>
+                <RichEditor
+                  ref={editor}
+                  initialContentHTML={content}
+                  placeholder="Tulis catatanmu di sini..."
+                  containerStyle={styles.editorContainer}
+                  editorStyle={{
+                    backgroundColor: '#FFFFFF',
+                    color: HomeColors.textTitle,
+                    placeholderColor: HomeColors.textMuted,
+                    caretColor: HomeColors.primary,
+                    contentCSSText: `font-size: 16px; line-height: 1.65; padding: 0; ${NOTE_CONTENT_CSS}`,
+                  }}
+                  initialHeight={260}
+                  onChange={setContent}
+                  onMessage={handleEditorMessage}
+                  editorInitializedCallback={() => {
+                    editor.current?.injectJavascript(editorSelectionScript);
+                    setTimeout(() => setIsEditorReady(true), 60);
+                  }}
+                  onCursorPosition={handleCursorPosition}
+                  style={styles.editor}
+                />
+              </FadeInView>
+            </View>
           </ScrollView>
 
           {!isAiVisible ? (
@@ -275,7 +315,12 @@ export default function CreateNoteScreen() {
           ) : null}
 
           {!isAiVisible ? (
-            <View style={styles.toolbar}>
+            <View
+              style={[
+                styles.toolbar,
+                { paddingBottom: isKeyboardVisible ? 0 : insets.bottom },
+              ]}
+            >
               <RichToolbar
                 getEditor={() => editor.current!}
                 actions={[
@@ -303,6 +348,7 @@ export default function CreateNoteScreen() {
         visible={isAiVisible}
         selectedText={selectedText}
         hasSelectedImage={Boolean(selectedImageKey)}
+        selectedImageUrl={selectedImageUrl}
         isLoading={ai.isLoading}
         output={ai.output}
         error={ai.error}
@@ -368,6 +414,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   editor: { minHeight: 260 },
+  editorContainer: { backgroundColor: '#FFFFFF' },
   error: { marginBottom: 10, color: '#B42318', fontSize: 12 },
   uploading: { marginBottom: 10, color: HomeColors.primary, fontSize: 12 },
   selectionToolbar: {

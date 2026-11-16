@@ -1,8 +1,8 @@
-
 import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, useColorScheme, View } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AuthProvider, useAuth } from '@/providers/auth-provider';
@@ -13,12 +13,14 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <AuthProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <AnimatedSplashOverlay />
-        <AppNavigator />
-      </ThemeProvider>
-    </AuthProvider>
+    <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
+      <AuthProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <AnimatedSplashOverlay />
+          <AppNavigator />
+        </ThemeProvider>
+      </AuthProvider>
+    </KeyboardProvider>
   );
 }
 
@@ -53,10 +55,7 @@ function AppNavigator() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="home/create" />
       <Stack.Screen name="home/[id]" />
-      <Stack.Screen
-        name="profile"
-        options={{ headerShown: true, title: 'Profil' }}
-      />
+      <Stack.Screen name="profile" options={{ headerShown: true, title: 'Profil' }} />
     </Stack>
   );
 }

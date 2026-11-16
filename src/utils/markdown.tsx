@@ -17,3 +17,16 @@ export const markdownRules: RenderRules = {
 export function markdownToHtml(markdown: string): string {
   return markdownParser.render(markdown);
 }
+
+export function appendHtmlContent(existing: string, addition: string): string {
+  const trimmedExisting = existing.trim();
+  const trimmedAddition = addition.trim();
+  if (!trimmedExisting) return trimmedAddition;
+  if (!trimmedAddition) return trimmedExisting;
+
+  const endsWithBlock = /<\/(p|div|h[1-6]|ul|ol|li|blockquote)>$/i.test(trimmedExisting);
+  if (endsWithBlock) {
+    return `${trimmedExisting}${trimmedAddition}`;
+  }
+  return `${trimmedExisting}<br/>${trimmedAddition}`;
+}

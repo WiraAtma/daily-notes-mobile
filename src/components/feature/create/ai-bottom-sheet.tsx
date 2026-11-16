@@ -2,9 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import Markdown, { type MarkdownStyleMap } from '@ronradtke/react-native-markdown-display';
 import { useEffect, useState } from 'react';
 import {
-  Animated,
   ActivityIndicator,
-  KeyboardAvoidingView,
+  Animated,
+  Dimensions,
+  Image,
+  Keyboard,
+  LayoutAnimation,
   Modal,
   Platform,
   Pressable,
@@ -19,10 +22,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { markdownParser, markdownRules } from '@/utils/markdown';
 
+// Jarak ekstra antara kolom input dan keyboard. Naikkan angkanya kalau masih kurang tinggi.
+const KEYBOARD_GAP = Platform.OS === 'android' ? 28 : 14;
+
 type Props = {
   visible: boolean;
   selectedText: string;
   hasSelectedImage: boolean;
+  selectedImageUrl?: string;
   isLoading: boolean;
   output: string | null;
   error: string | null;
@@ -36,6 +43,7 @@ export function AiBottomSheet({
   visible,
   selectedText,
   hasSelectedImage,
+  selectedImageUrl,
   isLoading,
   output,
   error,
@@ -47,11 +55,50 @@ export function AiBottomSheet({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [prompt, setPrompt] = useState('');
+  const [submittedPrompt, setSubmittedPrompt] = useState('');
   const [skeletonOpacity] = useState(() => new Animated.Value(1));
-  const sheetHeight = Math.min(
-    windowHeight * (output ? 0.78 : 0.52),
-    windowHeight - insets.top - 16,
-  );
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [failedImageUrl, setFailedImageUrl] = useState('');
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      try {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      } catch {
+        // Ignored
+      }
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      try {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      } catch {
+        // Ignored
+      }
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  // Percakapan dimulai baru setiap sheet dibuka.
+  useEffect(() => {
+    if (!visible) {
+      setSubmittedPrompt('');
+      setPrompt('');
+    }
+  }, [visible]);
+
+  const screenHeight = Math.max(windowHeight, Dimensions.get('screen').height);
+  const normalHeight = screenHeight * (output || submittedPrompt ? 0.78 : 0.52);
+  const availableHeight = screenHeight - insets.top - 16 - (keyboardHeight > 0 ? keyboardHeight : 0);
+  const sheetHeight = Math.max(220, Math.min(normalHeight, availableHeight));
 
   useEffect(() => {
     if (!isLoading) {
@@ -80,16 +127,21 @@ export function AiBottomSheet({
   }, [isLoading, skeletonOpacity]);
 
   const handleClose = () => {
+    Keyboard.dismiss();
     setPrompt('');
     onClose();
   };
 
   const handleGenerate = () => {
     if (!prompt.trim() || isLoading) return;
-    const submittedPrompt = prompt.trim();
+    const text = prompt.trim();
+    setSubmittedPrompt(text);
     setPrompt('');
-    void onGenerate(submittedPrompt).catch(() => undefined);
+    Keyboard.dismiss();
+    void onGenerate(text).catch(() => undefined);
   };
+
+  const showThumb = Boolean(selectedImageUrl) && failedImageUrl !== selectedImageUrl;
 
   return (
     <Modal
@@ -101,64 +153,87 @@ export function AiBottomSheet({
     >
       <View style={styles.overlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.keyboard}
+        <View
+          style={[
+            styles.sheet,
+            {
+              height: sheetHeight,
+              marginBottom: keyboardHeight,
+              paddingBottom: keyboardHeight > 0 ? KEYBOARD_GAP : Math.max(insets.bottom + 8, 24),
+            },
+          ]}
         >
-          <View
-            style={[
-              styles.sheet,
-              {
-                height: sheetHeight,
-                paddingBottom: Math.max(insets.bottom + 8, 24),
-              },
-            ]}
-          >
-            <View style={styles.handle} />
-            <View style={styles.header}>
-              <View style={styles.headerTitle}>
-                <View style={styles.aiIcon}>
-                  <Ionicons name="sparkles" size={16} color="#315FEA" />
-                </View>
-                <Text style={styles.title}>Tanya AI</Text>
-                <Text style={styles.pro}>AI</Text>
+          <View style={styles.handle} />
+          <View style={styles.header}>
+            <View style={styles.headerTitle}>
+              <View style={styles.aiIcon}>
+                <Ionicons name="sparkles" size={16} color="#315FEA" />
               </View>
-              <Pressable accessibilityLabel="Tutup Tanya AI" onPress={handleClose} hitSlop={10}>
-                <Ionicons name="close" size={22} color="#64748B" />
-              </Pressable>
+              <Text style={styles.title}>Tanya AI</Text>
+              <Text style={styles.pro}>AI</Text>
             </View>
+            <Pressable accessibilityLabel="Tutup Tanya AI" onPress={handleClose} hitSlop={10}>
+              <Ionicons name="close" size={22} color="#64748B" />
+            </Pressable>
+          </View>
 
-            <View style={styles.context}>
-              {hasSelectedImage ? (
-                <View style={styles.contextChip}>
-                  <Ionicons name="image-outline" size={14} color="#315FEA" />
+          <View style={styles.context}>
+            {hasSelectedImage ? (
+              <View style={styles.imageContext}>
+                {showThumb ? (
+                  <Image
+                    source={{ uri: selectedImageUrl }}
+                    style={styles.imageThumb}
+                    resizeMode="cover"
+                    accessibilityLabel="Pratinjau gambar yang dipilih"
+                    onError={() => setFailedImageUrl(selectedImageUrl ?? '')}
+                  />
+                ) : (
+                  <View style={[styles.imageThumb, styles.imageThumbFallback]}>
+                    <Ionicons name="image-outline" size={18} color="#315FEA" />
+                  </View>
+                )}
+                <View style={styles.imageMeta}>
                   <Text style={styles.contextText}>1 gambar dipilih</Text>
+                  <Text style={styles.imageHint}>Dikirim sebagai konteks ke AI</Text>
                 </View>
-              ) : null}
-              {selectedText ? (
-                <Text style={styles.selectedText} numberOfLines={3}>
-                  “{selectedText}”
-                </Text>
-              ) : null}
-              {!selectedText && !hasSelectedImage ? (
-                <Text style={styles.contextHint}>
-                  Tulis pertanyaan tentang catatan ini.
-                </Text>
-              ) : null}
-            </View>
+              </View>
+            ) : null}
+            {selectedText ? (
+              <Text style={styles.selectedText} numberOfLines={3}>
+                “{selectedText}”
+              </Text>
+            ) : null}
+            {!selectedText && !hasSelectedImage ? (
+              <Text style={styles.contextHint}>Tulis pertanyaan tentang catatan ini.</Text>
+            ) : null}
+          </View>
+
+          {/* Percakapan: pertanyaan user (kanan) lalu jawaban AI */}
+          <ScrollView
+            style={styles.thread}
+            contentContainerStyle={styles.threadContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {submittedPrompt ? (
+              <View style={styles.userRow}>
+                <View style={styles.userBubble}>
+                  <Text selectable style={styles.userText}>
+                    {submittedPrompt}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
 
             {output ? (
-              <ScrollView style={styles.answerWrap} keyboardShouldPersistTaps="handled">
+              <View>
                 <View style={styles.answerHeader}>
                   <Ionicons name="sparkles" size={14} color="#315FEA" />
                   <Text style={styles.answerLabel}>Daily AI · baru saja</Text>
                 </View>
                 <View style={styles.answer}>
-                  <Markdown
-                    markdownit={markdownParser}
-                    rules={markdownRules}
-                    style={markdownStyles}
-                  >
+                  <Markdown markdownit={markdownParser} rules={markdownRules} style={markdownStyles}>
                     {output}
                   </Markdown>
                 </View>
@@ -166,7 +241,7 @@ export function AiBottomSheet({
                   {onInsert ? (
                     <Pressable style={styles.secondaryButton} onPress={onInsert}>
                       <Ionicons name="document-text-outline" size={15} color="#315FEA" />
-                      <Text style={styles.secondaryButtonText}>Sisipkan ke Catatan</Text>
+                      <Text style={styles.secondaryButtonText}>Terapkan</Text>
                     </Pressable>
                   ) : null}
                   <Pressable style={styles.copyButton} onPress={onCopy}>
@@ -174,69 +249,62 @@ export function AiBottomSheet({
                     <Text style={styles.copyButtonText}>Salin</Text>
                   </Pressable>
                 </View>
-              </ScrollView>
-            ) : (
-              <View style={styles.answerSpacer}>
-                {isLoading ? (
-                  <View
-                    accessibilityLabel="AI sedang menyusun jawaban"
-                    style={styles.loadingAnswer}
-                  >
-                    <View style={styles.loadingHeader}>
-                      <Ionicons name="sparkles" size={15} color="#315FEA" />
-                      <Text style={styles.loadingTitle}>AI sedang menjawab</Text>
-                    </View>
-                    <Animated.View
-                      style={[styles.skeletonLine, styles.skeletonLong, { opacity: skeletonOpacity }]}
-                    />
-                    <Animated.View
-                      style={[styles.skeletonLine, styles.skeletonMedium, { opacity: skeletonOpacity }]}
-                    />
-                    <Animated.View
-                      style={[styles.skeletonLine, styles.skeletonShort, { opacity: skeletonOpacity }]}
-                    />
-                  </View>
-                ) : !error ? (
-                  <View style={styles.emptyState}>
-                    <Ionicons name="sparkles-outline" size={18} color="#929CB0" />
-                    <Text style={styles.emptyStateText}>Jawaban AI akan muncul di sini</Text>
-                  </View>
-                ) : null}
               </View>
-            )}
+            ) : isLoading ? (
+              <View accessibilityLabel="AI sedang menyusun jawaban" style={styles.loadingAnswer}>
+                <View style={styles.loadingHeader}>
+                  <Ionicons name="sparkles" size={15} color="#315FEA" />
+                  <Text style={styles.loadingTitle}>AI sedang menjawab</Text>
+                </View>
+                <Animated.View
+                  style={[styles.skeletonLine, styles.skeletonLong, { opacity: skeletonOpacity }]}
+                />
+                <Animated.View
+                  style={[styles.skeletonLine, styles.skeletonMedium, { opacity: skeletonOpacity }]}
+                />
+                <Animated.View
+                  style={[styles.skeletonLine, styles.skeletonShort, { opacity: skeletonOpacity }]}
+                />
+              </View>
+            ) : !error && !submittedPrompt ? (
+              <View style={styles.emptyWrap}>
+                <View style={styles.emptyState}>
+                  <Ionicons name="sparkles-outline" size={18} color="#929CB0" />
+                  <Text style={styles.emptyStateText}>Jawaban AI akan muncul di sini</Text>
+                </View>
+              </View>
+            ) : null}
+          </ScrollView>
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
 
-            <View style={styles.composer}>
-              <TextInput
-                value={prompt}
-                onChangeText={setPrompt}
-                placeholder="Ketik pertanyaan atau prompt..."
-                placeholderTextColor="#8A93A5"
-                multiline
-                editable={!isLoading}
-                maxLength={4000}
-                style={styles.input}
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Kirim pertanyaan ke AI"
-                disabled={!prompt.trim() || isLoading}
-                onPress={handleGenerate}
-                style={[styles.sendButton, (!prompt.trim() || isLoading) && styles.disabled]}
-              >
-                {isLoading ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
-                )}
-              </Pressable>
-            </View>
-            <Text style={styles.footnote}>
-              Konteks catatan dikirim ke AI untuk membantu menjawab.
-            </Text>
+          <View style={styles.composer}>
+            <TextInput
+              value={prompt}
+              onChangeText={setPrompt}
+              placeholder="Ketik pertanyaan atau prompt..."
+              placeholderTextColor="#8A93A5"
+              multiline
+              editable={!isLoading}
+              maxLength={4000}
+              style={styles.input}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Kirim pertanyaan ke AI"
+              disabled={!prompt.trim() || isLoading}
+              onPress={handleGenerate}
+              style={[styles.sendButton, (!prompt.trim() || isLoading) && styles.disabled]}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
+              )}
+            </Pressable>
           </View>
-        </KeyboardAvoidingView>
+          <Text style={styles.footnote}>Konteks catatan dikirim ke AI untuk membantu menjawab.</Text>
+        </View>
       </View>
     </Modal>
   );
@@ -248,7 +316,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(20, 27, 43, 0.42)',
   },
-  keyboard: { justifyContent: 'flex-end' },
   sheet: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -290,16 +357,23 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   context: { marginTop: 12, marginBottom: 10, gap: 8 },
-  contextChip: {
-    alignSelf: 'flex-start',
+  imageContext: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    borderRadius: 15,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    gap: 10,
+    padding: 8,
+    borderRadius: 12,
     backgroundColor: '#EEF1FF',
   },
+  imageThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#DDE3EF',
+  },
+  imageThumbFallback: { alignItems: 'center', justifyContent: 'center' },
+  imageMeta: { flex: 1, gap: 2 },
+  imageHint: { color: '#596579', fontSize: 10 },
   contextText: { color: '#315FEA', fontSize: 11, fontWeight: '600' },
   selectedText: {
     color: '#43506A',
@@ -310,8 +384,19 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   contextHint: { color: '#707B90', fontSize: 12 },
-  answerWrap: { flex: 1, minHeight: 0, marginBottom: 8 },
-  answerSpacer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  thread: { flex: 1, minHeight: 0, marginBottom: 8 },
+  threadContent: { flexGrow: 1, gap: 12, paddingBottom: 4 },
+  userRow: { alignItems: 'flex-end' },
+  userBubble: {
+    maxWidth: '85%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    borderBottomRightRadius: 6,
+    backgroundColor: '#315FEA',
+  },
+  userText: { color: '#FFFFFF', fontSize: 14, lineHeight: 20 },
+  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingAnswer: {
     width: '100%',
     gap: 12,

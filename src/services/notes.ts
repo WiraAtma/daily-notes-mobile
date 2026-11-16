@@ -1,3 +1,6 @@
+import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
+
 import { apiRequest } from './api';
 import type {
   AiGenerateResponse,
@@ -101,34 +104,78 @@ export async function uploadNoteImage(
   uri: string,
   fileName: string,
   mimeType: string | null,
+  fileSize?: number | null,
 ): Promise<{ objectKey: string; downloadUrl: string }> {
-  const imageResponse = await fetch(uri);
-  if (!imageResponse.ok) {
-    throw new Error('Foto tidak dapat dibaca dari perangkat.');
+  let size = typeof fileSize === 'number' && fileSize > 0 ? fileSize : 0;
+  let resolvedBlob: Blob | null = null;
+
+  if (Platform.OS === 'web') {
+    const imageResponse = await fetch(uri);
+    if (!imageResponse.ok) {
+      throw new Error('Foto tidak dapat dibaca dari perangkat.');
+    }
+    resolvedBlob = await imageResponse.blob();
+    size = resolvedBlob.size;
+  } else {
+    // Native (Android & iOS):
+    if (size <= 0) {
+      try {
+        const fileInfo = await FileSystem.getInfoAsync(uri);
+        if (fileInfo.exists && typeof fileInfo.size === 'number') {
+          size = fileInfo.size;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    if (size <= 0) {
+      try {
+        const imageResponse = await fetch(uri);
+        if (imageResponse.ok || imageResponse.status === 0) {
+          resolvedBlob = await imageResponse.blob();
+          size = resolvedBlob.size;
+        }
+      } catch {
+        // Fallback
+      }
+    }
   }
-  const imageBlob = await imageResponse.blob();
-  if (imageBlob.size === 0 || imageBlob.size > 5 * 1024 * 1024) {
+
+  if (size <= 0 || size > 5 * 1024 * 1024) {
     throw new Error('Ukuran foto harus lebih dari 0 dan maksimal 5 MiB.');
   }
 
-  const contentType = getImageContentType(mimeType, fileName, imageBlob.type);
+  const contentType = getImageContentType(mimeType, fileName, resolvedBlob?.type);
   const upload = await apiRequest<UploadUrlResponse>('/uploads/presigned-url', {
     method: 'POST',
     token,
     body: {
       file_name: fileName || `image.${getImageExtension(contentType)}`,
       content_type: contentType,
-      file_size: imageBlob.size,
+      file_size: size,
     },
   });
 
-  const uploaded = await fetch(upload.upload_url, {
-    method: 'PUT',
-    headers: { 'Content-Type': contentType },
-    body: imageBlob,
-  });
-  if (!uploaded.ok) {
-    throw new Error(`Unggah foto gagal (${uploaded.status}).`);
+  if (Platform.OS === 'web' && resolvedBlob) {
+    const uploaded = await fetch(upload.upload_url, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: resolvedBlob,
+    });
+    if (!uploaded.ok) {
+      throw new Error(`Unggah foto gagal (${uploaded.status}).`);
+    }
+  } else {
+    const uploadResult = await FileSystem.uploadAsync(upload.upload_url, uri, {
+      httpMethod: 'PUT',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        'Content-Type': contentType,
+      },
+    });
+    if (uploadResult.status < 200 || uploadResult.status >= 300) {
+      throw new Error(`Unggah foto gagal (${uploadResult.status}).`);
+    }
   }
 
   const downloadUrl = IMAGE_BASE_URL
@@ -192,13 +239,19 @@ export function htmlToPlainText(content: string): string {
 }
 
 function getImageContentType(
-  mimeType: string | null,
+  mimeType: string | null | undefined,
   fileName: string,
-  blobType: string,
+  blobType?: string | null,
 ): 'image/jpeg' | 'image/png' | 'image/webp' {
-  const type = mimeType || blobType;
-  if (type === 'image/jpeg' || type === 'image/png' || type === 'image/webp') {
-    return type;
+  const rawType = (mimeType || blobType || '').toLowerCase().trim();
+  if (rawType === 'image/jpeg' || rawType === 'image/jpg') {
+    return 'image/jpeg';
+  }
+  if (rawType === 'image/png') {
+    return 'image/png';
+  }
+  if (rawType === 'image/webp') {
+    return 'image/webp';
   }
 
   const extension = fileName.split('.').pop()?.toLowerCase();
